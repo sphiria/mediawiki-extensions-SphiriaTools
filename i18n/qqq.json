@@ -1,0 +1,41 @@
+{
+	"@metadata": {
+		"authors": [
+			"lis"
+		],
+		"last-updated": "$LastChangedDate$",
+		"locale": "qqq",
+		"message-documentation": null
+	},
+	"sphiriatools-desc": "{{desc|what=extension|name=SphiriaTools}}",
+	"specialpages-group-sphiria-tools": "Name of the special page group in Special:SpecialPages",
+	"redisjobqueue": "The name of the special page that displays the Redis job queue. {{Identical|Job queue}}",
+	"jobqueue-desc": "Description of the Special:JobQueue page listed on Special:SpecialPages",
+	"jobqueue-nojobs": "Message displayed when the job queue is empty",
+	"jobqueue-tblhdr-type": "Table header for the column showing the job command/type on Special:JobQueue.",
+	"jobqueue-tblhdr-queued": "Table header for the column showing the count of queued jobs on Special:JobQueue.",
+	"jobqueue-tblhdr-claimed": "Table header for the column showing the total count of claimed jobs (active + abandoned) on Special:JobQueue.",
+	"jobqueue-tblhdr-active": "Table header for the column showing the count of currently active (running) jobs on Special:JobQueue.",
+	"jobqueue-tblhdr-abandoned": "Table header for the column showing the count of abandoned jobs on Special:JobQueue.",
+	"jobqueue-tblhdr-delayed": "Table header for the column showing the count of delayed jobs on Special:JobQueue.",
+	"jobqueue-redis-extension-missing": "Error message shown on Special:JobQueue if the required PHP Redis extension is not available.",
+	"jobqueue-redis-config-missing": "Error message shown on Special:JobQueue if the extension cannot find the necessary Redis connection details in MediaWiki's configuration.",
+	"jobqueue-redis-error": "Error message shown on Special:JobQueue if connecting to or querying Redis fails. $1 is the specific error message from the Redis client or exception.",
+	"jobqueue-detaillist-heading": "Heading for the second table on Special:JobQueue that lists individual job details.",
+	"jobqueue-dtlhdr-id": "Table header for the Job ID column in the detailed job list.",
+	"jobqueue-dtlhdr-select": "Table header for the column containing checkboxes to select jobs in the detailed job list.",
+	"jobqueue-dtlhdr-type": "Table header for the Job Type column in the detailed job list.",
+	"jobqueue-dtlhdr-status": "Table header for the Job Status (Queued/Claimed) column in the detailed job list.",
+	"jobqueue-dtlhdr-data": "Table header for the Job Data column in the detailed job list, which shows the parameters/payload associated with the job.",
+	"jobqueue-dtlhdr-attempts": "Table header for the Attempts column in the detailed job list, showing how many times processing has been attempted for this job.",
+	"jobqueue-dtlhdr-timestamp": "Table header for the Timestamp column in the detailed job list. Currently shows the time a job was claimed.",
+	"jobqueue-showhide-show": "Text for the button used to reveal the hidden job data in the detailed list.",
+	"jobqueue-showhide-hide": "Text for the button used to re-hide the revealed job data in the detailed list.",
+	"jobqueue-nodetailjobs": "Message shown below the summary table if no individual queued or claimed jobs are found to populate the detailed list.",
+	"jobqueue-stale-claimed-title": "Tooltip text shown when hovering over a table row for a job that was claimed more than one hour ago, suggesting it might be stuck.",
+	"jobqueue-delete-selected": "Label for the button used to submit the form to delete the currently selected jobs in the detailed list.",
+	"jobqueue-delete-confirm-label": "Label for the checkbox that must be ticked before the delete button is enabled.",
+	"jobqueue-delete-noselection": "Warning message shown after submitting the deletion form if no checkboxes were selected.",
+	"jobqueue-delete-success": "Success message shown after attempting job deletion. Parameters: $1 = number of jobs successfully deleted, $2 = total number of jobs selected.",
+	"jobqueue-delete-error": "Error message shown if the Redis pipeline execution fails during job deletion. $1 is the specific error message."
+} 

@@ -1,0 +1,36 @@
+{
+	"name": "SphiriaTools",
+	"version": "0.1.0",
+	"author": "lis",
+	"url": "https://github.com/sphiria/mediawiki-extensions-SphiriaTools",
+	"descriptionmsg": "sphiriatools-desc",
+	"type": "specialpage",
+	"MessagesDirs": {
+		"SphiriaTools": [
+			"i18n"
+		]
+	},
+	"AutoloadNamespaces": {
+		"MediaWiki\\Extensions\\SphiriaTools\\": "src/"
+	},
+	"SpecialPages": {
+		"RedisJobQueue": "MediaWiki\\Extensions\\SphiriaTools\\SpecialRedisJobQueue"
+	},
+	"ResourceModules": {
+		"ext.sphiriatools.specialredisjobqueue": {
+			"localBasePath": ".",
+			"remoteExtPath": "SphiriaTools",
+			"scripts": "modules/SpecialRedisJobQueue.js",
+			"styles": [],
+			"messages": [
+				"jobqueue-showhide-show",
+				"jobqueue-showhide-hide"
+			],
+			"dependencies": [
+				"mediawiki.jqueryMsg"
+			],
+			"position": "bottom"
+		}
+	},
+	"manifest_version": 2
+} 
