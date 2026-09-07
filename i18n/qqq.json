@@ -37,5 +37,14 @@
 	"jobqueue-delete-confirm-label": "Label for the checkbox that must be ticked before the delete button is enabled.",
 	"jobqueue-delete-noselection": "Warning message shown after submitting the deletion form if no checkboxes were selected.",
 	"jobqueue-delete-success": "Success message shown after attempting job deletion. Parameters: $1 = number of jobs successfully deleted, $2 = total number of jobs selected.",
-	"jobqueue-delete-error": "Error message shown if the Redis pipeline execution fails during job deletion. $1 is the specific error message."
-} 
+	"jobqueue-delete-error": "Error shown when deletion fails. $1 is the Redis error. Earlier jobs in the selection may have been deleted.",
+	"jobqueue-select-all-title": "Tooltip for the checkbox that selects all jobs.",
+	"jobqueue-delete-permission": "Error shown when a user without editinterface tries to delete jobs.",
+	"jobqueue-delete-unconfirmed": "Warning shown when a deletion request lacks confirmation.",
+	"jobqueue-delete-invalid": "Error shown when the submitted selection contains malformed job identifiers.",
+	"jobqueue-redis-config-missing-server": "Error shown when the default Redis job queue has no server configured.",
+	"jobqueue-redis-connect-error": "Error shown when the MediaWiki Redis connection pool cannot connect.",
+	"jobqueue-search-label": "Label for the job payload search field.",
+	"jobqueue-search-placeholder": "Placeholder in the job payload search field.",
+	"jobqueue-delete-readonly": "Error shown when a selected queue has readOnlyReason configured. The entire selection is rejected."
+}

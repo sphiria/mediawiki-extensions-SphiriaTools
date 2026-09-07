@@ -2,348 +2,189 @@
 
 namespace MediaWiki\Extensions\SphiriaTools;
 
-use MediaWiki\SpecialPage\SpecialPage;
-use MediaWiki\MediaWikiServices;
-use Redis;
-use RedisException;
-use Language;
-use MediaWiki\User\User;
+use MediaWiki\Html\Html;
+use MediaWiki\JobQueue\JobQueueRedis;
+use MediaWiki\Language\Language;
+use MediaWiki\Logger\LoggerFactory;
 use MediaWiki\Output\OutputPage;
 use MediaWiki\Request\WebRequest;
-use MediaWiki\Logger\LoggerFactory;
-use Html;
+use MediaWiki\SpecialPage\SpecialPage;
+use MediaWiki\User\User;
+use MediaWiki\WikiMap\WikiMap;
+use RedisException;
+use Wikimedia\ObjectCache\RedisConnectionPool;
 
 class SpecialRedisJobQueue extends SpecialPage {
 
 	public function __construct() {
-		parent::__construct( 'RedisJobQueue', '', true );
+		parent::__construct( 'RedisJobQueue' );
 	}
 
-	/**
-	 * @inheritDoc
-	 */
+	public function getRestriction(): string {
+		return 'read';
+	}
+
+	public function doesWrites() {
+		return true;
+	}
+
+	/** @inheritDoc */
 	public function execute( $subPage ) {
 		$startTime = microtime( true );
-
+		$this->setHeaders();
+		$this->checkPermissions();
 		$out = $this->getOutput();
 		$user = $this->getUser();
-		$lang = $this->getLanguage();
 		$request = $this->getRequest();
-		$this->setHeaders();
 		$out->addModules( 'ext.sphiriatools.specialredisjobqueue' );
-		$out->addInlineStyle('.jobqueue-stale-claimed td { background-color: #fee !important; }');
-		$out->addInlineStyle('.jobqueue-data-content { display: none; }');
-		$out->addInlineStyle('.jobqueue-search-highlight { background-color: yellow; font-weight: bold; }');
 
-		list($redis, $error) = $this->connectToRedis();
-		if ($error) {
-			$out->addWikiMsg( 'jobqueue-redis-error', $error );
+		[ $store, $error ] = $this->connectToRedis();
+		if ( $error !== null ) {
+			$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-redis-error', $error )->escaped() ) );
 			return;
 		}
 
 		try {
-			if ($request->wasPosted() && $request->getVal( 'deleteSelected' ) ) {
+			if ( $request->wasPosted() && $request->getVal( 'deleteSelected' ) ) {
 				if ( !$user->isAllowed( 'editinterface' ) ) {
-					$out->addWikiMsg( 'badaccess-groups' );
+					$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-delete-permission' )->escaped() ) );
 				} elseif ( !$user->matchEditToken( $request->getVal( 'wpEditToken' ) ) ) {
-					$out->addWikiMsg( 'sessionfailure' );
+					$out->addHTML( Html::errorBox( $this->msg( 'sessionfailure' )->escaped() ) );
 				} else {
-					$this->handleDeleteRequest( $request, $user, $out, $redis );
+					$this->checkReadOnly();
+					$this->handleDeleteRequest( $request, $out, $store );
 				}
 			}
 
-			$dbName = MediaWikiServices::getInstance()->getMainConfig()->get('DBname');
-			$keyPattern = "{$dbName}:jobqueue:*:l-unclaimed";
-			$iterator = null;
-			$redis->setOption(Redis::OPT_SCAN, Redis::SCAN_RETRY);
-			$jobKeys = [];
-
-			while ($keys = $redis->scan($iterator, $keyPattern, 20)) {
-				$jobKeys = array_merge($jobKeys, $keys);
-				if ($iterator === 0) {
-					break;
-				}
-			}
-
-			while ($iterator !== 0 && $keys !== false) {
-				$keys = $redis->scan($iterator, $keyPattern, 20);
-				if ($keys !== false) {
-					$jobKeys = array_merge($jobKeys, $keys);
-				}
-				if ($iterator === 0) {
-					break;
-				}
-			}
-			
-			sort($jobKeys);
-
-			if ( !$jobKeys ) {
+			$summary = $store->getSummary();
+			if ( !$summary ) {
 				$out->addWikiMsg( 'jobqueue-nojobs' );
 				return;
 			}
 
-			$jobDetails = [];
-			$jobHData = [];
-			$jobAttemptsData = [];
-
-			$summaryHtml = '<table class="wikitable sortable">';
-			$summaryHtml .= '<thead><tr>';
-			$summaryHtml .= '<th>' . $this->msg( 'jobqueue-tblhdr-type' )->escaped() . '</th>';
-			$summaryHtml .= '<th>' . $this->msg( 'jobqueue-tblhdr-queued' )->escaped() . '</th>';
-			$summaryHtml .= '<th>' . $this->msg( 'jobqueue-tblhdr-claimed' )->escaped() . '</th>';
+			$summaryHtml = '<table class="wikitable sortable"><thead><tr>';
+			foreach ( [ 'type', 'queued', 'claimed' ] as $column ) {
+				$summaryHtml .= Html::element( 'th', [], $this->msg( 'jobqueue-tblhdr-' . $column )->text() );
+			}
 			$summaryHtml .= '</tr></thead><tbody>';
+			foreach ( $summary as $type => $counts ) {
+				$summaryHtml .= '<tr>' . Html::element( 'td', [], $type ) .
+					Html::element( 'td', [], (string)$counts['queued'] ) .
+					Html::element( 'td', [], (string)$counts['claimed'] ) . '</tr>';
+			}
+			$out->addHTML( $summaryHtml . '</tbody></table>' );
 
-			foreach ( $jobKeys as $jobKey ) {
-				$prefix = '{$dbName}:jobqueue:';
-				$suffix = ':l-unclaimed';
-				if (strpos($jobKey, $prefix) === 0 && substr($jobKey, -strlen($suffix)) === $suffix) {
-					$type = substr($jobKey, strlen($prefix), -strlen($suffix));
+			// Load payloads only for users who may view them.
+			if ( $user->isAllowed( 'editinterface' ) ) {
+				$details = $store->getDetails( array_keys( $summary ) );
+				if ( $details ) {
+					$this->generateDetailedTable( $out, $this->getLanguage(), $user, $details );
 				} else {
-					$type = $jobKey;
-				}
-
-				$claimedKey = "{$dbName}:jobqueue:{$type}:z-claimed";
-				$hDataKey = "{$dbName}:jobqueue:{$type}:h-data";
-				$hAttemptsKey = "{$dbName}:jobqueue:{$type}:h-attempts";
-
-				$queuedCount = $redis->lLen( $jobKey );
-				if ($queuedCount === false) { $queuedCount = 0; }
-
-				$claimedCount = $redis->zCard( $claimedKey );
-				if ($claimedCount === false) { $claimedCount = 0; }
-
-				$summaryHtml .= '<tr>';
-				$summaryHtml .= '<td>' . htmlspecialchars( $type ) . '</td>';
-				$summaryHtml .= '<td>' . htmlspecialchars( $queuedCount ) . '</td>';
-				$summaryHtml .= '<td>' . htmlspecialchars( $claimedCount ) . '</td>';
-				$summaryHtml .= '</tr>';
-
-				$hDataResult = $redis->hGetAll($hDataKey);
-				$jobHData[$type] = ($hDataResult !== false) ? $hDataResult : [];
-
-				$hAttemptsResult = $redis->hGetAll($hAttemptsKey);
-				$jobAttemptsData[$type] = ($hAttemptsResult !== false) ? $hAttemptsResult : [];
-
-				$queuedIds = $redis->lRange($jobKey, 0, -1);
-				if ($queuedIds !== false) {
-					foreach($queuedIds as $id) {
-						$jobDetails[] = ['id' => $id, 'type' => $type, 'status' => 'Queued', 'timestamp' => null];
-					}
-				}
-
-				$claimedData = $redis->zRange($claimedKey, 0, -1, true);
-				if ($claimedData !== false) {
-					 foreach($claimedData as $id => $timestamp) {
-						 $isQueued = false;
-						 foreach ($jobDetails as $existingDetail) {
-							 if ($existingDetail['id'] === $id && $existingDetail['type'] === $type && $existingDetail['status'] === 'Queued') {
-								 $isQueued = true;
-								 break;
-							 }
-						 }
-						 if (!$isQueued) {
-							 $jobDetails[] = ['id' => $id, 'type' => $type, 'status' => 'Claimed', 'timestamp' => $timestamp];
-						 }
-					}
+					$out->addWikiMsg( 'jobqueue-nodetailjobs' );
 				}
 			}
-
-			$summaryHtml .= '</tbody></table>';
-			$out->addHTML( $summaryHtml );
-
-			if ( !$user->isAllowed('editinterface') ) {
-				return;
-			}
-
-			usort($jobDetails, function($a, $b) {
-				if ($a['status'] === 'Claimed' && $b['status'] !== 'Claimed') {
-					return -1;
-				}
-				if ($a['status'] !== 'Claimed' && $b['status'] === 'Claimed') {
-					return 1; 
-				}
-
-				if ($a['status'] === 'Claimed' && $b['status'] === 'Claimed') {
-					$tsA = $a['timestamp'] ?? PHP_INT_MAX;
-					$tsB = $b['timestamp'] ?? PHP_INT_MAX;
-					return $tsA <=> $tsB;
-				}
-
-				return $a['id'] <=> $b['id'];
-			});
-
-			$uniqueJobs = [];
-			foreach ($jobDetails as $job) {
-				$uniqueKey = $job['type'] . '|' . $job['id'];
-				$uniqueJobs[$uniqueKey] = $job;
-			}
-			$allJobDetails = array_values($uniqueJobs);
-
-			$jobsToDisplay = $allJobDetails;
-			$totalJobs = count($jobsToDisplay);
-
-			if ( !empty( $jobsToDisplay ) ) {
-				$allTypes = [];
-				foreach ( $jobsToDisplay as $job ) {
-					$allTypes[$job['type']] = true;
-				}
-
-				$jobHData = [];
-				$jobAttemptsData = [];
-
-				foreach ( array_keys( $allTypes ) as $type ) {
-					$hDataKey = "{$dbName}:jobqueue:{$type}:h-data";
-					$hAttemptsKey = "{$dbName}:jobqueue:{$type}:h-attempts";
-					$hDataResult = $redis->hGetAll( $hDataKey );
-					$jobHData[$type] = ( $hDataResult !== false ) ? $hDataResult : [];
-					$hAttemptsResult = $redis->hGetAll( $hAttemptsKey );
-					$jobAttemptsData[$type] = ( $hAttemptsResult !== false ) ? $hAttemptsResult : [];
-				}
-
-				$this->generateDetailedTable( $out, $lang, $user, $jobsToDisplay, $jobHData, $jobAttemptsData );
-
-			} else {
-				$out->addWikiTextAsInterface( $this->msg( 'jobqueue-nodetailjobs' )->text() );
-			}
-
 		} catch ( RedisException $e ) {
-			\MediaWiki\Logger\LoggerFactory::getInstance( 'SphiriaTools' )->error(
-				'Redis connection/command failed for Special:JobQueue: {message}',
+			LoggerFactory::getInstance( 'SphiriaTools' )->error(
+				'Redis command failed for Special:RedisJobQueue: {message}',
 				[ 'message' => $e->getMessage(), 'exception' => $e ]
 			);
-			$out->addWikiMsg( 'jobqueue-redis-error', $e->getMessage() );
+			$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-redis-error', $e->getMessage() )->escaped() ) );
 		} finally {
-			 if (isset($redis) && $redis->isConnected()) {
-				 $redis->close();
-			 }
+			// RedisConnRef returns the connection to core's pool when released.
+			unset( $store );
+			$out->addHTML( Html::element( 'div', [ 'class' => 'jobqueue-generation-time' ],
+				sprintf( 'Page generated in %.3f seconds', microtime( true ) - $startTime ) ) );
 		}
-
-		$endTime = microtime( true );
-		$duration = $endTime - $startTime;
-		$out->addHTML( 
-			'<div style="text-align: right; font-size: smaller; color: #777; margin-top: 1em;">' . 
-			htmlspecialchars( sprintf( "Page generated in %.3f seconds", $duration ) ) . 
-			'</div>'
-		); 
 	}
 
+	/** @return array{?RedisJobQueueStore,?string} */
 	private function connectToRedis(): array {
 		if ( !extension_loaded( 'redis' ) ) {
-			return [null, $this->msg('jobqueue-redis-extension-missing')->text()];
+			return [ null, $this->msg( 'jobqueue-redis-extension-missing' )->text() ];
 		}
-		$config = MediaWikiServices::getInstance()->getMainConfig();
-		$jobTypeConf = $config->get( 'JobTypeConf' );
-		$defaultQueueConf = $jobTypeConf['default'] ?? null;
-
-		if ( !$defaultQueueConf || ($defaultQueueConf['class'] ?? '') !== 'JobQueueRedis' ) {
-			return [null, $this->msg('jobqueue-redis-config-missing')->text()];
+		$conf = $this->getConfig()->get( 'JobTypeConf' )['default'] ?? [];
+		$class = $conf['class'] ?? '';
+		if ( !is_string( $class ) || !is_a( $class, JobQueueRedis::class, true ) ) {
+			return [ null, $this->msg( 'jobqueue-redis-config-missing' )->text() ];
 		}
-		$redisConf = $defaultQueueConf['redisServer'] ?? null;
-		if ( !$redisConf ) {
-			$redisConf = $defaultQueueConf['redisConfig']['host'] ?? null;
-			if (!$redisConf) {
-				return [null, $this->msg('jobqueue-redis-config-missing-server')->text()];
-			}
+		if ( !is_string( $conf['redisServer'] ?? null ) || $conf['redisServer'] === '' ) {
+			return [ null, $this->msg( 'jobqueue-redis-config-missing-server' )->text() ];
 		}
-
-		$serverParts = explode( ':', $redisConf, 2 );
-		$redisHost = $serverParts[0];
-		$redisSpecificConfig = $defaultQueueConf['redisConfig'] ?? [];
-		$redisPort = $redisSpecificConfig['port'] ?? $serverParts[1] ?? 6379;
-		$redisPassword = $defaultQueueConf['redisPassword'] ?? $redisSpecificConfig['password'] ?? null;
-		$redisDb = $defaultQueueConf['redisDatabase'] ?? $redisSpecificConfig['database'] ?? 0;
-		$redisTimeout = $redisSpecificConfig['timeout'] ?? 2.5;
-		$redisPersistent = $redisSpecificConfig['persistent'] ?? false;
-
-		try {
-			$redis = new Redis();
-			if ( !$redis->connect( $redisHost, (int)$redisPort ) ) {
-				 throw new RedisException( "Could not connect to Redis server at $redisHost:$redisPort" );
-			}
-			if ( $redisPassword && !$redis->auth( $redisPassword ) ) {
-				throw new RedisException( "Redis authentication failed." );
-			}
-			if ( $redisDb && !$redis->select( (int)$redisDb ) ) {
-				 throw new RedisException( "Could not select Redis database $redisDb." );
-			}
-			return [$redis, null];
-		} catch (RedisException $e) {
-			return [null, $e->getMessage()];
+		$redisConfig = $conf['redisConfig'] ?? [];
+		// Match JobQueueRedis: payloads are serialized by the queue itself.
+		$redisConfig['serializer'] = 'none';
+		$pool = RedisConnectionPool::singleton( $redisConfig );
+		$connection = $pool->getConnection( $conf['redisServer'], LoggerFactory::getInstance( 'SphiriaTools' ) );
+		if ( !$connection ) {
+			return [ null, $this->msg( 'jobqueue-redis-connect-error' )->text() ];
 		}
+		$domain = WikiMap::getCurrentWikiDbDomain()->getId();
+		return [ new RedisJobQueueStore( $connection, $domain ), null ];
 	}
 
-	/**
-	 * @inheritDoc
-	 */
+	/** @inheritDoc */
 	protected function getGroupName() {
 		return 'sphiria-tools';
 	}
 
-	private function handleDeleteRequest( WebRequest $request, User $user, OutputPage $out, Redis $redis ): void {
-		$selectedJobs = $request->getArray('selectedJobs', []);
-		if (empty($selectedJobs)) {
-			$out->addWarning( $this->msg( 'jobqueue-delete-noselection' )->text() );
+	private function handleDeleteRequest( WebRequest $request, OutputPage $out, RedisJobQueueStore $store ): void {
+		$selectedJobs = $request->getArray( 'selectedJobs', [] );
+		if ( !$selectedJobs ) {
+			$out->addHTML( Html::warningBox( $this->msg( 'jobqueue-delete-noselection' )->escaped() ) );
+			return;
+		}
+		if ( !$request->getBool( 'confirmDelete' ) ) {
+			$out->addHTML( Html::warningBox( $this->msg( 'jobqueue-delete-unconfirmed' )->escaped() ) );
 			return;
 		}
 
-		$dbName = MediaWikiServices::getInstance()->getMainConfig()->get('DBname');
+		// Validate the complete selection before deleting anything. JSON keeps job
+		// types and IDs containing separator characters unambiguous.
+		$jobs = [];
+		$jobTypeConf = $this->getConfig()->get( 'JobTypeConf' );
+		foreach ( $selectedJobs as $value ) {
+			$job = is_string( $value ) ? json_decode( $value, true ) : null;
+			if ( !is_array( $job ) || !array_is_list( $job ) || count( $job ) !== 2 ||
+				!is_string( $job[0] ) || !is_string( $job[1] ) || $job[0] === '' || $job[1] === ''
+			) {
+				$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-delete-invalid' )->escaped() ) );
+				return;
+			}
+			$queueConf = $jobTypeConf[$job[0]] ?? $jobTypeConf['default'];
+			if ( ( $queueConf['readOnlyReason'] ?? false ) !== false ) {
+				$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-delete-readonly' )->escaped() ) );
+				return;
+			}
+			$jobs[json_encode( $job )] = $job;
+		}
 
-		$deletedCount = 0;
+		$deleted = 0;
 		try {
-			$pipe = $redis->pipeline();
-			foreach ($selectedJobs as $jobValue) {
-				$parts = explode('|', $jobValue, 3);
-				if (count($parts) === 3) {
-					$type = $parts[0];
-					$jobId = $parts[1];
-					$claimedKey = "{$dbName}:jobqueue:{$type}:z-claimed";
-					$hDataKey = "{$dbName}:jobqueue:{$type}:h-data";
-					$hAttemptsKey = "{$dbName}:jobqueue:{$type}:h-attempts";
-					$unclaimedKey = "{$dbName}:jobqueue:{$type}:l-unclaimed";
-					$pipe->zrem($claimedKey, $jobId);
-					$pipe->hdel($hDataKey, $jobId);
-					$pipe->hdel($hAttemptsKey, $jobId);
-					$pipe->lrem($unclaimedKey, $jobId, 0);
-				}
+			foreach ( $jobs as [ $type, $id ] ) {
+				$deleted += (int)$store->deleteJob( $type, $id );
 			}
-			$results = $pipe->exec();
-
-			if ( is_array( $results ) ) {
-				$numJobsAttempted = count( $selectedJobs );
-				$expectedResultsPerJob = 4;
-				for ($i = 0; $i < $numJobsAttempted; $i++) {
-					$zremIndex = $i * $expectedResultsPerJob;
-					$lremIndex = $zremIndex + 3;
-					$jobRemoved = false;
-					if (isset($results[$zremIndex]) && $results[$zremIndex] > 0) {
-						$jobRemoved = true;
-						$deletedCount++;
-					}
-				}
-			}
-
-			$successMsg = $this->msg( 'jobqueue-delete-success', $deletedCount, count($selectedJobs) )->parse();
-			$out->addHTML('<div class="mw-message-box mw-message-box-success">' . $successMsg . '</div>');
-
-		} catch (RedisException $e) {
-			\MediaWiki\Logger\LoggerFactory::getInstance( 'SphiriaTools' )->error(
-				'Redis pipeline/exec failed during job deletion: {message}',
+			$out->addHTML( Html::successBox(
+				$this->msg( 'jobqueue-delete-success', $deleted, count( $jobs ) )->escaped()
+			) );
+		} catch ( RedisException $e ) {
+			LoggerFactory::getInstance( 'SphiriaTools' )->error(
+				'Redis command failed during job deletion: {message}',
 				[ 'message' => $e->getMessage(), 'exception' => $e ]
 			);
-			$out->addError( $this->msg( 'jobqueue-delete-error', $e->getMessage() )->text() );
+			$out->addHTML( Html::errorBox( $this->msg( 'jobqueue-delete-error', $e->getMessage() )->escaped() ) );
 		}
 	}
 
-	private function generateDetailedTable( OutputPage $out, Language $lang, User $user, array $jobsForCurrentPage, array $jobHData, array $jobAttemptsData ): void {
+	private function generateDetailedTable( OutputPage $out, Language $lang, User $user, array $jobsForCurrentPage ): void {
 
 		$detailHtml = '<h2>' . $this->msg( 'jobqueue-detaillist-heading' )->escaped() . '</h2>';
 
-		$detailHtml .= '<div style="margin-bottom: 1em;">' . 
-			'<label for="jobqueue-search-input">' . $this->msg('jobqueue-search-label')->escaped() . '</label> ' . 
+		$detailHtml .= '<div style="margin-bottom: 1em;">' .
+			'<label for="jobqueue-search-input">' . $this->msg('jobqueue-search-label')->escaped() . '</label> ' .
 			Html::input( 'jobqueue-search', '', 'text', [
 				'id' => 'jobqueue-search-input',
 				'placeholder' => $this->msg('jobqueue-search-placeholder')->text()
-			] ) . 
+			] ) .
 			'</div>';
 
 		$detailHtml .= '<form id="jobqueue-detail-form" method="post" action="' . htmlspecialchars( $this->getPageTitle()->getLocalURL() ) . '">';
@@ -365,7 +206,7 @@ class SpecialRedisJobQueue extends SpecialPage {
 			$jobStatus = $detail['status'];
 			$jobTimestamp = $detail['timestamp'];
 
-			$attemptCount = $jobAttemptsData[$jobType][$jobId] ?? 0;
+			$attemptCount = $detail['attempts'];
 
 			$rowAttrs = [];
 
@@ -383,26 +224,10 @@ class SpecialRedisJobQueue extends SpecialPage {
 			}
 
 			$formattedData = 'N/A';
-			$typeHData = $jobHData[$jobType] ?? [];
-			$hDataString = $typeHData[$jobId] ?? null;
+			$hDataString = $detail['data'];
 
-			if ( $hDataString !== null && is_string( $hDataString ) ) {
-				set_error_handler(function() { /* ignore errors */ });
-				try {
-					$unserializedData = unserialize( $hDataString );
-				} finally {
-					restore_error_handler();
-				}
-
-				if ($unserializedData !== false || $hDataString === 'b:0;') {
-					$dataContent = '<pre>' . htmlspecialchars( print_r( $unserializedData, true ) ) . '</pre>';
-				} else {
-					$dataContent = '<pre>' . htmlspecialchars( $hDataString ) . '</pre>';
-					LoggerFactory::getInstance( 'SphiriaTools' )->warning(
-						'Failed to unserialize job data for job ID {jobId}, type {jobType}. Displaying raw data.',
-						['jobId' => $jobId, 'jobType' => $jobType]
-					);
-				}
+			if ( is_string( $hDataString ) ) {
+				$dataContent = Html::element( 'pre', [], RedisJobQueueStore::formatData( $hDataString ) );
 				$formattedData = sprintf(
 					'<button type="button" class="mw-ui-button mw-ui-quiet jobqueue-data-toggle">%s</button><div class="jobqueue-data-content">%s</div>',
 					$this->msg( 'jobqueue-showhide-show' )->escaped(),
@@ -417,7 +242,7 @@ class SpecialRedisJobQueue extends SpecialPage {
 			}
 
 			$detailHtml .= '<tr' . $rowAttrString . '>';
-			$checkboxValue = $jobType . '|' . $jobId . '|' . $jobStatus;
+			$checkboxValue = json_encode( [ $jobType, $jobId ] );
 			$detailHtml .= '<td style="text-align: center;"><input type="checkbox" name="selectedJobs[]" value="' . htmlspecialchars( $checkboxValue ) . '" class="jobqueue-select-job"></td>';
 			$detailHtml .= '<td data-sort-value="' . htmlspecialchars( $jobId ) . '">' . htmlspecialchars( $jobId ) . '</td>';
 			$detailHtml .= '<td data-sort-value="' . htmlspecialchars( $jobType ) . '">' . htmlspecialchars( $jobType ) . '</td>';
@@ -432,7 +257,7 @@ class SpecialRedisJobQueue extends SpecialPage {
 
 		$detailHtml .= '<div style="margin-top: 1em;">';
 		$detailHtml .= '<div style="margin-bottom: 0.5em;">';
-		$detailHtml .= '<input type="checkbox" id="confirm-delete" class="mw-ui-checkbox">';
+		$detailHtml .= '<input type="checkbox" id="confirm-delete" name="confirmDelete" value="1" class="mw-ui-checkbox">';
 		$detailHtml .= '<label for="confirm-delete"> ' . $this->msg('jobqueue-delete-confirm-label')->escaped() . '</label>';
 		$detailHtml .= '</div>';
 		$detailHtml .= '<input type="submit" id="delete-jobs-button" name="deleteSelected" value="' . $this->msg( 'jobqueue-delete-selected' )->escaped() . '" class="mw-ui-button mw-ui-destructive" disabled>';

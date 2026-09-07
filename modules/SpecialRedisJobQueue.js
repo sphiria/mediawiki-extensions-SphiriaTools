@@ -4,6 +4,13 @@
 	$( function () {
 		// Clear search input on page load
 		$( '#jobqueue-search-input' ).val('');
+		$( '#confirm-delete' ).prop( 'checked', false );
+		$( '#delete-jobs-button' ).prop( 'disabled', true );
+		$( '.wikitable.sortable' ).tablesorter();
+
+		$( '#jobqueue-select-all' ).on( 'change', function () {
+			$( '.jobqueue-select-job' ).prop( 'checked', this.checked );
+		} );
 
 		// Handler for the show/hide data buttons
 		$( '.jobqueue-data-toggle' ).on( 'click', function () {
@@ -80,9 +87,12 @@
 					}
 
 					if ( searchTerm !== '' && highlightRegex && originalText ) {
-						var escapedOriginal = $( '<div/>' ).text( originalText ).html(); 
-						var highlightedHtml = escapedOriginal.replace( highlightRegex, '<mark class="jobqueue-search-highlight">$1</mark>' );
-						$dataPre.html( highlightedHtml );
+						$dataPre.empty();
+						originalText.split( highlightRegex ).forEach( function ( part, index ) {
+							$dataPre.append( index % 2 ?
+								$( '<mark>' ).addClass( 'jobqueue-search-highlight' ).text( part ) :
+								document.createTextNode( part ) );
+						} );
 					} else if ( originalText ) {
 						$dataPre.text( originalText );
 					}
@@ -100,4 +110,4 @@
 
 	} );
 
-}( jQuery, mediaWiki ) ); 
+}( jQuery, mediaWiki ) );

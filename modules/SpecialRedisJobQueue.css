@@ -1,0 +1,19 @@
+.jobqueue-stale-claimed td {
+	background-color: #fee !important;
+}
+
+.jobqueue-data-content {
+	display: none;
+}
+
+.jobqueue-search-highlight {
+	background-color: yellow;
+	font-weight: bold;
+}
+
+.jobqueue-generation-time {
+	text-align: right;
+	font-size: smaller;
+	color: #777;
+	margin-top: 1em;
+}

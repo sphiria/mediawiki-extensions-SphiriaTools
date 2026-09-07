@@ -37,12 +37,17 @@
 	"jobqueue-delete-confirm-label": "Confirm deletion of selected jobs",
 	"jobqueue-delete-noselection": "No jobs were selected for deletion.",
 	"jobqueue-delete-success": "Successfully deleted $1 out of $2 selected jobs.",
-	"jobqueue-delete-error": "An error occurred while trying to delete jobs: $1",
+	"jobqueue-delete-error": "An error occurred while trying to delete jobs: $1. Some selected jobs may already have been deleted.",
 	"jobqueue-summary-heading": "Job Queue Summary",
 	"jobqueue-summary-jobtype": "Job Type",
 	"jobqueue-search-label": "Search Job Data:",
 	"jobqueue-search-placeholder": "Enter text to filter jobs...",
 	"jobqueue-redis-config-missing-default": "Could not find valid Redis configuration. The 'default' JobQueueConf type must be 'JobQueueRedis'.",
-	"jobqueue-redis-config-missing-server": "Could not find the Redis server address ('redisServer' or 'redisConfig.host') in the 'default' JobQueueConf.",
-	"jobqueue-redis-connect-error": "Could not connect to Redis: $1"
-} 
+	"jobqueue-redis-config-missing-server": "Could not find redisServer in the default JobTypeConf configuration.",
+	"jobqueue-redis-connect-error": "Unable to connect to the configured Redis server. See the server logs for details.",
+	"jobqueue-select-all-title": "Select all jobs",
+	"jobqueue-delete-permission": "You need the editinterface permission to delete jobs.",
+	"jobqueue-delete-unconfirmed": "Confirm deletion before deleting selected jobs.",
+	"jobqueue-delete-invalid": "The job selection is invalid. Reload the page and try again.",
+	"jobqueue-delete-readonly": "One of the selected job queues is read-only. No jobs were deleted."
+}
